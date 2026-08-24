@@ -159,28 +159,11 @@ fun MainNavigation(
         )
     }
 
-    var hasNotificationPermission by remember {
-        mutableStateOf(
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-            } else true
-        )
-    }
-
     val stepLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
         hasStepPermission = isGranted
         if (isGranted) {
             onStartStepCounter()
             onStartActivityRecognition()
-        }
-    }
-
-    val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
-        hasNotificationPermission = isGranted
-        if (isGranted) {
-            viewModel.updateNotificationsEnabled(true)
-        } else {
-            viewModel.updateNotificationsEnabled(false)
         }
     }
 
@@ -202,33 +185,6 @@ fun MainNavigation(
         }
     }
 
-    if (viewModel.showNotificationDialog) {
-        AlertDialog(
-            onDismissRequest = { viewModel.updateNotificationsEnabled(false) },
-            title = { Text("Уведомления о шагах") },
-            text = { Text("Хотите видеть количество пройденных шагов в панели уведомлений?") },
-            confirmButton = {
-                TextButton(onClick = {
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                    } else {
-                        viewModel.updateNotificationsEnabled(true)
-                    }
-                }) {
-                    Text("ДА")
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = { viewModel.updateNotificationsEnabled(false) }) {
-                    Text("НЕТ")
-                }
-            },
-            containerColor = DeepBlue,
-            titleContentColor = SkyBlue,
-            textContentColor = TextWhite
-        )
-    }
-    
     val xpPerLevel = 3000L
     val userLevel = (steps / xpPerLevel) + 1
     val xpProgress = (steps % xpPerLevel).toFloat() / xpPerLevel.toFloat()
@@ -261,14 +217,6 @@ fun MainNavigation(
                     composable(Screen.Achievements.route) { AchievementsScreen(steps) }
                     composable(Screen.Settings.route) {
                         SettingsScreen(
-                            notificationsEnabled = viewModel.notificationsEnabled,
-                            onToggleNotifications = { enabled ->
-                                if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission) {
-                                    notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                                } else {
-                                    viewModel.updateNotificationsEnabled(enabled)
-                                }
-                            },
                             activityRecognitionEnabled = activityRecognitionEnabled,
                             onToggleActivityRecognition = { enabled ->
                                 viewModel.updateActivityRecognitionEnabled(enabled)

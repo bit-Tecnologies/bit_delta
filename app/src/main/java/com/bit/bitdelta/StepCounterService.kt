@@ -35,11 +35,12 @@ class StepCounterService : Service(), SensorEventListener {
         super.onCreate()
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
         createNotificationChannel()
-        startForegroundCompat()
+        migrateForegroundNotification()
 
         serviceScope.launch {
             val savedSteps = StepCounterStorage.loadAndMigrate(dataStore)
             tracker = StepCounterTracker(savedSteps)
+            updateForegroundNotification(savedSteps)
             registerStepSensor()
             initialized = true
         }
@@ -86,6 +87,7 @@ class StepCounterService : Service(), SensorEventListener {
                     preferences[StepCounterStorage.stepsKey] = newSteps
                 }
             }
+            updateForegroundNotification(newSteps)
         }
     }
 
@@ -111,24 +113,46 @@ class StepCounterService : Service(), SensorEventListener {
     }
 
     private fun startForegroundCompat() {
-        val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
+        startForegroundCompat(NOTIFICATION_ID)
+    }
+
+    private fun startForegroundCompat(notificationId: Int) {
+        val notification = buildNotification(null)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(
+                notificationId,
+                notification,
+                android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH
+            )
+        } else {
+            startForeground(notificationId, notification)
+        }
+    }
+
+    private fun migrateForegroundNotification() {
+        // Claim and remove the old foreground ID before publishing the current one.
+        startForegroundCompat(LEGACY_FOREGROUND_ID)
+        stopForeground(true)
+        startForegroundCompat()
+    }
+
+    private fun updateForegroundNotification(steps: Long) {
+        getSystemService(NotificationManager::class.java)
+            .notify(NOTIFICATION_ID, buildNotification(steps))
+    }
+
+    private fun buildNotification(steps: Long?): Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_compass)
             .setContentTitle("bit Delta")
-            .setContentText("Подсчёт шагов продолжается в фоне")
+            .setContentText(steps?.let { "Всего пройдено: $it шагов" } ?: "Подсчёт шагов продолжается в фоне")
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(NOTIFICATION_ID, notification, android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_HEALTH)
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
-        }
-    }
-
     private companion object {
         const val TAG = "StepCounterService"
         const val CHANNEL_ID = "step_tracking_channel"
-        const val NOTIFICATION_ID = 2
+        const val NOTIFICATION_ID = 1
+        const val LEGACY_FOREGROUND_ID = 2
     }
 }

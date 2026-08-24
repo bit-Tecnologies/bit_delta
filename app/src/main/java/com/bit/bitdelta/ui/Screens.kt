@@ -255,8 +255,6 @@ fun KineticCore(steps: Long) {
 
 @Composable
 fun SettingsScreen(
-    notificationsEnabled: Boolean,
-    onToggleNotifications: (Boolean) -> Unit,
     activityRecognitionEnabled: Boolean,
     onToggleActivityRecognition: (Boolean) -> Unit
 ) {
@@ -283,29 +281,6 @@ fun SettingsScreen(
                     },
                     valueRange = 1000f..30000f,
                     colors = SliderDefaults.colors(thumbColor = SkyBlue, activeTrackColor = SkyBlue)
-                )
-            }
-        }
-
-        Spacer(Modifier.height(16.dp))
-
-        GlassCard(Modifier.fillMaxWidth()) {
-            Row(
-                modifier = Modifier.padding(16.dp).fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column {
-                    Text("Статус в уведомлениях", color = TextWhite)
-                    Text("Показывать шаги в панели", color = TextWhite.copy(alpha = 0.6f), fontSize = 12.sp)
-                }
-                Switch(
-                    checked = notificationsEnabled,
-                    onCheckedChange = onToggleNotifications,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = SkyBlue,
-                        checkedTrackColor = SkyBlue.copy(alpha = 0.5f)
-                    )
                 )
             }
         }
