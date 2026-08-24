@@ -6,15 +6,15 @@ import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.app.NotificationCompat
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
-import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -23,12 +23,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val dataStore = application.dataStore
     private val context = application.applicationContext
 
-    private val STEPS_KEY = floatPreferencesKey("steps_count")
     private val NOTIFICATIONS_ENABLED_KEY = booleanPreferencesKey("notifications_enabled")
     private val ACTIVITY_RECOGNITION_ENABLED_KEY = booleanPreferencesKey("activity_recognition_enabled")
     private val NOTIFICATION_SETUP_DONE_KEY = booleanPreferencesKey("notification_setup_done")
 
-    var stepsCount by mutableFloatStateOf(0f)
+    var stepsCount by mutableLongStateOf(0L)
         private set
 
     var notificationsEnabled by mutableStateOf(false)
@@ -43,10 +42,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     var currentActivity by mutableStateOf("Покой")
         private set
 
-    var initialSteps = -1f
-    var isLoaded = false
-        private set
-
     private val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
     private val CHANNEL_ID = "steps_channel"
     private val NOTIFICATION_ID = 1
@@ -55,7 +50,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         createNotificationChannel()
         viewModelScope.launch {
             val prefs = dataStore.data.first()
-            stepsCount = prefs[STEPS_KEY] ?: 0f
+            stepsCount = StepCounterStorage.loadAndMigrate(dataStore)
             notificationsEnabled = prefs[NOTIFICATIONS_ENABLED_KEY] ?: false
             activityRecognitionEnabled = prefs[ACTIVITY_RECOGNITION_ENABLED_KEY] ?: false
 
@@ -64,10 +59,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 showNotificationDialog = true
             }
 
-            isLoaded = true
             if (notificationsEnabled) {
                 updateNotification()
             }
+
+            dataStore.data
+                .map { it[StepCounterStorage.stepsKey] ?: 0L }
+                .distinctUntilChanged()
+                .collect { newSteps ->
+                    stepsCount = newSteps
+                    updateNotification()
+                }
         }
 
         viewModelScope.launch {
@@ -117,7 +119,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_menu_compass) // Можно заменить на иконку приложения
             .setContentTitle("bit Delta: Активность")
-            .setContentText("Сегодня пройдено: ${stepsCount.toInt()} шагов")
+            .setContentText("Всего пройдено: $stepsCount шагов")
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
@@ -125,21 +127,4 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         notificationManager.notify(NOTIFICATION_ID, notification)
     }
 
-    fun updateSteps(newSteps: Float) {
-        if (!isLoaded) return
-        stepsCount = newSteps
-        updateNotification()
-        viewModelScope.launch {
-            dataStore.edit { it[STEPS_KEY] = newSteps }
-        }
-        }
-
-    fun incrementStep() {
-        if (!isLoaded) return
-        stepsCount += 1f
-        updateNotification()
-        viewModelScope.launch {
-            dataStore.edit { it[STEPS_KEY] = stepsCount }
-        }
-    }
 }

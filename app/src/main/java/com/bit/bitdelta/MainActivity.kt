@@ -5,9 +5,6 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Build
 import android.os.Bundle
@@ -43,11 +40,7 @@ import com.google.android.gms.location.ActivityRecognitionClient
 
 val Context.dataStore by preferencesDataStore(name = "settings")
 
-class MainActivity : ComponentActivity(), SensorEventListener {
-    private lateinit var sensorManager: SensorManager
-    private var stepCounterSensor: Sensor? = null
-    private var stepDetectorSensor: Sensor? = null
-    
+class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
     private var isSensorAvailable by mutableStateOf(true)
 
@@ -58,9 +51,9 @@ class MainActivity : ComponentActivity(), SensorEventListener {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
-        stepCounterSensor = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
-        stepDetectorSensor = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
+        val sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
+        val stepCounterSensor = sensorManager.getDefaultSensor(android.hardware.Sensor.TYPE_STEP_COUNTER)
+        val stepDetectorSensor = sensorManager.getDefaultSensor(android.hardware.Sensor.TYPE_STEP_DETECTOR)
         
         if (stepCounterSensor == null && stepDetectorSensor == null) {
             isSensorAvailable = false
@@ -73,10 +66,26 @@ class MainActivity : ComponentActivity(), SensorEventListener {
                 MainNavigation(
                     viewModel = viewModel,
                     isSensorAvailable = isSensorAvailable,
+                    onStartStepCounter = { startStepCounter() },
                     onStartActivityRecognition = { startActivityRecognition() },
                     onStopActivityRecognition = { stopActivityRecognition() }
                 )
             }
+        }
+    }
+
+    private fun startStepCounter() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) != PackageManager.PERMISSION_GRANTED
+        ) {
+            return
+        }
+
+        val intent = Intent(this, StepCounterService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ContextCompat.startForegroundService(this, intent)
+        } else {
+            startService(intent)
         }
     }
 
@@ -120,43 +129,6 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             }
     }
 
-    override fun onResume() {
-        super.onResume()
-        // Используем step counter, если он есть; step detector — как запасной
-        if (stepCounterSensor != null) {
-            sensorManager.registerListener(this, stepCounterSensor, SensorManager.SENSOR_DELAY_NORMAL)
-        } else if (stepDetectorSensor != null) {
-            sensorManager.registerListener(this, stepDetectorSensor, SensorManager.SENSOR_DELAY_FASTEST)
-        }
-    }
-
-    override fun onPause() {
-        super.onPause()
-        sensorManager.unregisterListener(this)
-    }
-
-    override fun onSensorChanged(event: SensorEvent?) {
-        if (event == null || !viewModel.isLoaded) return
-        
-        when (event.sensor.type) {
-            Sensor.TYPE_STEP_COUNTER -> {
-                val sensorValue = event.values[0]
-                if (viewModel.initialSteps == -1f) {
-                    viewModel.initialSteps = sensorValue - viewModel.stepsCount
-                }
-                
-                val calculatedSteps = sensorValue - viewModel.initialSteps
-                if (calculatedSteps > viewModel.stepsCount) {
-                    viewModel.updateSteps(calculatedSteps)
-                }
-            }
-            Sensor.TYPE_STEP_DETECTOR -> {
-                viewModel.incrementStep()
-            }
-        }
-    }
-
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
 }
 
 sealed class Screen(val route: String, val icon: ImageVector, val label: String) {
@@ -169,13 +141,14 @@ sealed class Screen(val route: String, val icon: ImageVector, val label: String)
 fun MainNavigation(
     viewModel: MainViewModel,
     isSensorAvailable: Boolean,
+    onStartStepCounter: () -> Unit,
     onStartActivityRecognition: () -> Unit,
     onStopActivityRecognition: () -> Unit
 ) {
     val navController = rememberNavController()
     val context = LocalContext.current
     val isTablet = LocalConfiguration.current.screenWidthDp >= 600
-    val steps = viewModel.stepsCount.toInt()
+    val steps = viewModel.stepsCount
     val activityRecognitionEnabled = viewModel.activityRecognitionEnabled
 
     var hasStepPermission by remember {
@@ -197,6 +170,7 @@ fun MainNavigation(
     val stepLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
         hasStepPermission = isGranted
         if (isGranted) {
+            onStartStepCounter()
             onStartActivityRecognition()
         }
     }
@@ -210,7 +184,13 @@ fun MainNavigation(
         }
     }
 
-    LaunchedEffect(hasStepPermission, activityRecognitionEnabled) {
+    LaunchedEffect(hasStepPermission) {
+        if (hasStepPermission) {
+            onStartStepCounter()
+        }
+    }
+
+    LaunchedEffect(activityRecognitionEnabled, hasStepPermission) {
         if (activityRecognitionEnabled) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !hasStepPermission) {
                 stepLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
@@ -249,9 +229,9 @@ fun MainNavigation(
         )
     }
     
-    val xpPerLevel = 3000
+    val xpPerLevel = 3000L
     val userLevel = (steps / xpPerLevel) + 1
-    val xpProgress = (steps % xpPerLevel).toFloat() / xpPerLevel
+    val xpProgress = (steps % xpPerLevel).toFloat() / xpPerLevel.toFloat()
 
     Row(modifier = Modifier.fillMaxSize().background(DeepBlue)) {
         if (isTablet) NavigationSideBar(navController)

@@ -34,8 +34,8 @@ import java.util.Locale
 
 @Composable
 fun HomeScreen(
-    steps: Int, 
-    level: Int, 
+    steps: Long,
+    level: Long,
     xpProgress: Float, 
     isAvailable: Boolean,
     hasPermission: Boolean,
@@ -147,7 +147,7 @@ fun PermissionWarning(onGrant: () -> Unit) {
     }
 }
 
-fun getRank(level: Int): String {
+fun getRank(level: Long): String {
     return when {
         level < 5 -> "Новичок"
         level < 10 -> "Атлет"
@@ -157,13 +157,13 @@ fun getRank(level: Int): String {
 }
 
 @Composable
-fun AchievementsScreen(totalSteps: Int) {
+fun AchievementsScreen(totalSteps: Long) {
     val awards = remember(totalSteps) {
         listOf(
             Award("Контакт", "Система активна", totalSteps > 0),
-            Award("Разминка", "5,000 шагов", totalSteps >= 5000),
-            Award("Атлет", "Уровень 10 достигнут", totalSteps >= 20000),
-            Award("Легенда", "Пройдено 100,000 шагов", totalSteps >= 100000)
+            Award("Разминка", "5,000 шагов", totalSteps >= 5000L),
+            Award("Атлет", "Уровень 10 достигнут", totalSteps >= 20000L),
+            Award("Легенда", "Пройдено 100,000 шагов", totalSteps >= 100000L)
         )
     }
 
@@ -200,7 +200,7 @@ fun AchievementsScreen(totalSteps: Int) {
 data class Award(val title: String, val desc: String, val isUnlocked: Boolean)
 
 @Composable
-fun LevelHeader(level: Int, progress: Float) {
+fun LevelHeader(level: Long, progress: Float) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text("УРОВЕНЬ $level", color = SkyBlue, fontWeight = FontWeight.Bold)
@@ -217,7 +217,7 @@ fun LevelHeader(level: Int, progress: Float) {
 }
 
 @Composable
-fun KineticCore(steps: Int) {
+fun KineticCore(steps: Long) {
     val infiniteTransition = rememberInfiniteTransition(label = "core")
     val pulseScale by infiniteTransition.animateFloat(
         initialValue = 1f, 
@@ -238,7 +238,7 @@ fun KineticCore(steps: Int) {
             contentAlignment = Alignment.Center
         ) {
             CircularProgressIndicator(
-                progress = { (steps % 10000) / 10000f },
+                progress = { (steps % 10000L).toFloat() / 10000f },
                 modifier = Modifier.size(210.dp),
                 color = SkyBlue,
                 strokeWidth = 10.dp,
