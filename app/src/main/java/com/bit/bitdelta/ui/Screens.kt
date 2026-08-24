@@ -1,5 +1,6 @@
 package com.bit.bitdelta.ui
 
+import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -24,6 +25,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.bit.bitdelta.ui.theme.*
 import com.bit.bitdelta.dataStore
+import com.bit.bitdelta.ActivityNames
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import kotlinx.coroutines.flow.map
@@ -37,6 +39,7 @@ fun HomeScreen(
     xpProgress: Float, 
     isAvailable: Boolean,
     hasPermission: Boolean,
+    currentActivity: String,
     onGrantPermission: () -> Unit
 ) {
     val context = LocalContext.current
@@ -48,6 +51,9 @@ fun HomeScreen(
         verticalArrangement = Arrangement.Top
     ) {
         LevelHeader(level, xpProgress)
+        Spacer(Modifier.height(16.dp))
+
+        ActivityBadge(currentActivity)
         Spacer(Modifier.height(16.dp))
 
         if (!hasPermission) {
@@ -72,6 +78,46 @@ fun HomeScreen(
                 StatItem("Дистанция", String.format(Locale.getDefault(), "%.2f км", steps * 0.0007))
                 StatItem("Цель", "${goal / 1000}к")
                 StatItem("Ранг", getRank(level))
+            }
+        }
+    }
+}
+
+@Composable
+fun ActivityBadge(activity: String) {
+    val icon = when (activity) {
+        ActivityNames.WALKING -> Icons.Rounded.DirectionsWalk
+        ActivityNames.RUNNING -> Icons.Rounded.DirectionsRun
+        ActivityNames.CYCLING -> Icons.Rounded.DirectionsBike
+        ActivityNames.IN_VEHICLE -> Icons.Rounded.DirectionsCar
+        else -> Icons.Rounded.AccessibilityNew
+    }
+
+    Surface(
+        color = SkyBlue.copy(alpha = 0.15f),
+        shape = CircleShape,
+        modifier = Modifier.border(1.dp, SkyBlue.copy(alpha = 0.3f), CircleShape)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(icon, contentDescription = null, tint = SkyBlue, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            AnimatedContent(
+                targetState = activity,
+                transitionSpec = {
+                    fadeIn() + slideInVertically { it } togetherWith fadeOut() + slideOutVertically { -it }
+                },
+                label = "activity_text"
+            ) { text ->
+                Text(
+                    text = text.uppercase(),
+                    color = TextWhite,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.5.sp
+                )
             }
         }
     }
@@ -208,7 +254,12 @@ fun KineticCore(steps: Int) {
 }
 
 @Composable
-fun SettingsScreen() {
+fun SettingsScreen(
+    notificationsEnabled: Boolean,
+    onToggleNotifications: (Boolean) -> Unit,
+    activityRecognitionEnabled: Boolean,
+    onToggleActivityRecognition: (Boolean) -> Unit
+) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val goalKey = intPreferencesKey("step_goal")
@@ -221,6 +272,7 @@ fun SettingsScreen() {
     ) {
         Text("НАСТРОЙКИ", color = SkyBlue, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(40.dp))
+
         GlassCard(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
                 Text("Дневная цель: $goal", color = TextWhite)
@@ -231,6 +283,56 @@ fun SettingsScreen() {
                     },
                     valueRange = 1000f..30000f,
                     colors = SliderDefaults.colors(thumbColor = SkyBlue, activeTrackColor = SkyBlue)
+                )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        GlassCard(Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column {
+                    Text("Статус в уведомлениях", color = TextWhite)
+                    Text("Показывать шаги в панели", color = TextWhite.copy(alpha = 0.6f), fontSize = 12.sp)
+                }
+                Switch(
+                    checked = notificationsEnabled,
+                    onCheckedChange = onToggleNotifications,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = SkyBlue,
+                        checkedTrackColor = SkyBlue.copy(alpha = 0.5f)
+                    )
+                )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        GlassCard(Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column {
+                    Text("Автоопределение активности", color = TextWhite)
+                    Text(
+                        "Распознавать тренировки в фоне",
+                        color = TextWhite.copy(alpha = 0.6f),
+                        fontSize = 12.sp
+                    )
+                }
+                Switch(
+                    checked = activityRecognitionEnabled,
+                    onCheckedChange = onToggleActivityRecognition,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = SkyBlue,
+                        checkedTrackColor = SkyBlue.copy(alpha = 0.5f)
+                    )
                 )
             }
         }

@@ -1,7 +1,9 @@
 package com.bit.bitdelta
 
 import android.Manifest
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -9,11 +11,13 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.viewModels
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -34,6 +38,8 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.bit.bitdelta.ui.*
 import com.bit.bitdelta.ui.theme.*
+import com.google.android.gms.location.ActivityRecognition
+import com.google.android.gms.location.ActivityRecognitionClient
 
 val Context.dataStore by preferencesDataStore(name = "settings")
 
@@ -42,9 +48,11 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     private var stepCounterSensor: Sensor? = null
     private var stepDetectorSensor: Sensor? = null
     
-    private var _stepsCount by mutableFloatStateOf(0f)
-    private var initialSteps = -1f
+    private val viewModel: MainViewModel by viewModels()
     private var isSensorAvailable by mutableStateOf(true)
+
+    private lateinit var activityRecognitionClient: ActivityRecognitionClient
+    private val detectionIntervalMillis = 3000L // 3 секунды
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -58,24 +66,67 @@ class MainActivity : ComponentActivity(), SensorEventListener {
             isSensorAvailable = false
         }
 
+        activityRecognitionClient = ActivityRecognition.getClient(this)
+
         setContent {
             BitDeltaTheme {
                 MainNavigation(
-                    steps = _stepsCount.toInt(),
-                    isSensorAvailable = isSensorAvailable
+                    viewModel = viewModel,
+                    isSensorAvailable = isSensorAvailable,
+                    onStartActivityRecognition = { startActivityRecognition() },
+                    onStopActivityRecognition = { stopActivityRecognition() }
                 )
             }
         }
     }
 
+    private fun startActivityRecognition() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) != PackageManager.PERMISSION_GRANTED) {
+            return
+        }
+
+        val intent = Intent(this, ActivityRecognitionReceiver::class.java)
+        val pendingIntent = PendingIntent.getBroadcast(
+            this,
+            0,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+        )
+
+        activityRecognitionClient.requestActivityUpdates(detectionIntervalMillis, pendingIntent)
+            .addOnSuccessListener {
+                Log.d("ActivityRecognition", "Successfully requested activity updates")
+            }
+            .addOnFailureListener { e ->
+                Log.e("ActivityRecognition", "Failed to request activity updates", e)
+            }
+    }
+
+    private fun stopActivityRecognition() {
+        val intent = Intent(this, ActivityRecognitionReceiver::class.java)
+        val pendingIntent = PendingIntent.getBroadcast(
+            this,
+            0,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+        )
+
+        activityRecognitionClient.removeActivityUpdates(pendingIntent)
+            .addOnSuccessListener {
+                Log.d("ActivityRecognition", "Successfully removed activity updates")
+            }
+            .addOnFailureListener { e ->
+                Log.e("ActivityRecognition", "Failed to remove activity updates", e)
+            }
+    }
+
     override fun onResume() {
         super.onResume()
-        // Используем FASTEST для живого отклика и NORMAL для стабильности в фоне
-        stepCounterSensor?.let { 
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL) 
-        }
-        stepDetectorSensor?.let { 
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_FASTEST) 
+        // Используем step counter, если он есть; step detector — как запасной
+        if (stepCounterSensor != null) {
+            sensorManager.registerListener(this, stepCounterSensor, SensorManager.SENSOR_DELAY_NORMAL)
+        } else if (stepDetectorSensor != null) {
+            sensorManager.registerListener(this, stepDetectorSensor, SensorManager.SENSOR_DELAY_FASTEST)
         }
     }
 
@@ -85,25 +136,22 @@ class MainActivity : ComponentActivity(), SensorEventListener {
     }
 
     override fun onSensorChanged(event: SensorEvent?) {
-        if (event == null) return
+        if (event == null || !viewModel.isLoaded) return
         
         when (event.sensor.type) {
             Sensor.TYPE_STEP_COUNTER -> {
                 val sensorValue = event.values[0]
-                if (initialSteps == -1f) {
-                    // Ключевое исправление: калибруем базу с учетом уже сделанных шагов через детектор
-                    initialSteps = sensorValue - _stepsCount
+                if (viewModel.initialSteps == -1f) {
+                    viewModel.initialSteps = sensorValue - viewModel.stepsCount
                 }
                 
-                val calculatedSteps = sensorValue - initialSteps
-                if (calculatedSteps > _stepsCount) {
-                    _stepsCount = calculatedSteps
+                val calculatedSteps = sensorValue - viewModel.initialSteps
+                if (calculatedSteps > viewModel.stepsCount) {
+                    viewModel.updateSteps(calculatedSteps)
                 }
             }
             Sensor.TYPE_STEP_DETECTOR -> {
-                // Детектор срабатывает мгновенно. 
-                // Он помогает не ждать "пачки" от основного счетчика.
-                _stepsCount += 1f
+                viewModel.incrementStep()
             }
         }
     }
@@ -118,12 +166,19 @@ sealed class Screen(val route: String, val icon: ImageVector, val label: String)
 }
 
 @Composable
-fun MainNavigation(steps: Int, isSensorAvailable: Boolean) {
+fun MainNavigation(
+    viewModel: MainViewModel,
+    isSensorAvailable: Boolean,
+    onStartActivityRecognition: () -> Unit,
+    onStopActivityRecognition: () -> Unit
+) {
     val navController = rememberNavController()
     val context = LocalContext.current
     val isTablet = LocalConfiguration.current.screenWidthDp >= 600
+    val steps = viewModel.stepsCount.toInt()
+    val activityRecognitionEnabled = viewModel.activityRecognitionEnabled
 
-    var hasPermission by remember { 
+    var hasStepPermission by remember {
         mutableStateOf(
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) == PackageManager.PERMISSION_GRANTED
@@ -131,14 +186,67 @@ fun MainNavigation(steps: Int, isSensorAvailable: Boolean) {
         )
     }
 
-    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
-        hasPermission = isGranted
+    var hasNotificationPermission by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+            } else true
+        )
     }
 
-    LaunchedEffect(Unit) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !hasPermission) {
-            launcher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+    val stepLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+        hasStepPermission = isGranted
+        if (isGranted) {
+            onStartActivityRecognition()
         }
+    }
+
+    val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+        hasNotificationPermission = isGranted
+        if (isGranted) {
+            viewModel.updateNotificationsEnabled(true)
+        } else {
+            viewModel.updateNotificationsEnabled(false)
+        }
+    }
+
+    LaunchedEffect(hasStepPermission, activityRecognitionEnabled) {
+        if (activityRecognitionEnabled) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && !hasStepPermission) {
+                stepLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+            } else if (hasStepPermission) {
+                onStartActivityRecognition()
+            }
+        } else {
+            onStopActivityRecognition()
+        }
+    }
+
+    if (viewModel.showNotificationDialog) {
+        AlertDialog(
+            onDismissRequest = { viewModel.updateNotificationsEnabled(false) },
+            title = { Text("Уведомления о шагах") },
+            text = { Text("Хотите видеть количество пройденных шагов в панели уведомлений?") },
+            confirmButton = {
+                TextButton(onClick = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    } else {
+                        viewModel.updateNotificationsEnabled(true)
+                    }
+                }) {
+                    Text("ДА")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { viewModel.updateNotificationsEnabled(false) }) {
+                    Text("НЕТ")
+                }
+            },
+            containerColor = DeepBlue,
+            titleContentColor = SkyBlue,
+            textContentColor = TextWhite
+        )
     }
     
     val xpPerLevel = 3000
@@ -161,16 +269,32 @@ fun MainNavigation(steps: Int, isSensorAvailable: Boolean) {
                             level = userLevel, 
                             xpProgress = xpProgress, 
                             isAvailable = isSensorAvailable,
-                            hasPermission = hasPermission,
+                            hasPermission = hasStepPermission,
+                            currentActivity = viewModel.currentActivity,
                             onGrantPermission = {
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                    launcher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
+                                    stepLauncher.launch(Manifest.permission.ACTIVITY_RECOGNITION)
                                 }
                             }
                         ) 
                     }
                     composable(Screen.Achievements.route) { AchievementsScreen(steps) }
-                    composable(Screen.Settings.route) { SettingsScreen() }
+                    composable(Screen.Settings.route) {
+                        SettingsScreen(
+                            notificationsEnabled = viewModel.notificationsEnabled,
+                            onToggleNotifications = { enabled ->
+                                if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasNotificationPermission) {
+                                    notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                } else {
+                                    viewModel.updateNotificationsEnabled(enabled)
+                                }
+                            },
+                            activityRecognitionEnabled = activityRecognitionEnabled,
+                            onToggleActivityRecognition = { enabled ->
+                                viewModel.updateActivityRecognitionEnabled(enabled)
+                            }
+                        )
+                    }
                 }
             }
         }
