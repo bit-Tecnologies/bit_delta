@@ -45,7 +45,7 @@ class MainActivity : ComponentActivity() {
     private var isSensorAvailable by mutableStateOf(true)
 
     private lateinit var activityRecognitionClient: ActivityRecognitionClient
-    private val detectionIntervalMillis = 3000L // 3 секунды
+    private val detectionIntervalMillis = 20_000L // 20 секунд: достаточно для статуса, экономит батарею
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -75,22 +75,11 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startStepCounter() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) != PackageManager.PERMISSION_GRANTED
-        ) {
-            return
-        }
-
-        val intent = Intent(this, StepCounterService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            ContextCompat.startForegroundService(this, intent)
-        } else {
-            startService(intent)
-        }
+        StepCounterService.start(this)
     }
 
     private fun startActivityRecognition() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACTIVITY_RECOGNITION) != PackageManager.PERMISSION_GRANTED) {
+        if (!StepCounterService.hasActivityPermission(this)) {
             return
         }
 
@@ -102,13 +91,18 @@ class MainActivity : ComponentActivity() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
         )
 
-        activityRecognitionClient.requestActivityUpdates(detectionIntervalMillis, pendingIntent)
-            .addOnSuccessListener {
-                Log.d("ActivityRecognition", "Successfully requested activity updates")
-            }
-            .addOnFailureListener { e ->
-                Log.e("ActivityRecognition", "Failed to request activity updates", e)
-            }
+        try {
+            activityRecognitionClient.requestActivityUpdates(detectionIntervalMillis, pendingIntent)
+                .addOnSuccessListener {
+                    Log.d("ActivityRecognition", "Successfully requested activity updates")
+                }
+                .addOnFailureListener { e ->
+                    Log.e("ActivityRecognition", "Failed to request activity updates", e)
+                }
+        } catch (e: SecurityException) {
+            // The permission was revoked between the check above and the call.
+            Log.w("ActivityRecognition", "Permission revoked, activity updates not started", e)
+        }
     }
 
     private fun stopActivityRecognition() {
@@ -120,13 +114,18 @@ class MainActivity : ComponentActivity() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
         )
 
-        activityRecognitionClient.removeActivityUpdates(pendingIntent)
-            .addOnSuccessListener {
-                Log.d("ActivityRecognition", "Successfully removed activity updates")
-            }
-            .addOnFailureListener { e ->
-                Log.e("ActivityRecognition", "Failed to remove activity updates", e)
-            }
+        try {
+            activityRecognitionClient.removeActivityUpdates(pendingIntent)
+                .addOnSuccessListener {
+                    Log.d("ActivityRecognition", "Successfully removed activity updates")
+                }
+                .addOnFailureListener { e ->
+                    Log.e("ActivityRecognition", "Failed to remove activity updates", e)
+                }
+        } catch (e: SecurityException) {
+            // Nothing to stop if the permission is gone: the updates are not delivered anyway.
+            Log.w("ActivityRecognition", "Permission revoked, cannot remove activity updates", e)
+        }
     }
 
 }
@@ -160,16 +159,21 @@ fun MainNavigation(
     }
 
     val stepLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
+        // Сервис и распознавание активности запускаются эффектами ниже по ключу hasStepPermission;
+        // распознавание — только если оно включено в настройках.
         hasStepPermission = isGranted
-        if (isGranted) {
-            onStartStepCounter()
-            onStartActivityRecognition()
-        }
     }
+
+    val notificationLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     LaunchedEffect(hasStepPermission) {
         if (hasStepPermission) {
             onStartStepCounter()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                notificationLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
         }
     }
 

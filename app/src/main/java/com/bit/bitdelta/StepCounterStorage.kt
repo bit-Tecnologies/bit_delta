@@ -8,6 +8,8 @@ import androidx.datastore.preferences.core.longPreferencesKey
 
 internal object StepCounterStorage {
     val stepsKey = longPreferencesKey("steps_count_long")
+    val lastSensorKey = longPreferencesKey("last_sensor_value")
+    val lastBootIdKey = longPreferencesKey("last_boot_id")
     private val legacyStepsKey = floatPreferencesKey("steps_count")
 
     suspend fun loadAndMigrate(dataStore: DataStore<Preferences>): Long {

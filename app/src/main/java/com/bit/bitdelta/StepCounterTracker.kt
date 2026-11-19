@@ -2,25 +2,41 @@ package com.bit.bitdelta
 
 /**
  * Keeps the app's total step count independent from the sensor's boot-relative value.
+ *
+ * The last seen sensor value and boot id are persisted by the caller and passed back in, so steps
+ * the hardware counted while the service was not running are still added after a restart.
  */
-internal class StepCounterTracker(initialSteps: Long) {
+internal class StepCounterTracker(
+    initialSteps: Long,
+    initialSensorValue: Long? = null,
+    initialBootId: Long = 0L
+) {
     var totalSteps: Long = initialSteps.coerceAtLeast(0L)
         private set
 
-    private var sensorBaseline: Long? = null
-    private var lastSensorValue: Long? = null
+    var lastSensorValue: Long? = initialSensorValue
+        private set
 
-    fun onCounterValue(sensorValue: Long): Long {
-        val sensorReset = lastSensorValue != null && sensorValue < lastSensorValue!!
-        if (sensorBaseline == null || sensorReset) {
-            sensorBaseline = sensorValue - totalSteps
+    var lastBootId: Long = initialBootId
+        private set
+
+    /**
+     * @param bootId changes after every device reboot; the hardware counter restarts from zero then.
+     */
+    fun onCounterValue(sensorValue: Long, bootId: Long = lastBootId): Long {
+        val last = lastSensorValue
+        val reset = last != null && (bootId != lastBootId || sensorValue < last)
+
+        when {
+            // First reading ever: there is no reference point, so don't count history we never saw.
+            last == null -> Unit
+            // Counter restarted from zero: everything it shows now was walked since the reset.
+            reset -> totalSteps += sensorValue
+            else -> totalSteps += sensorValue - last
         }
 
-        val calculatedSteps = sensorValue - sensorBaseline!!
-        if (calculatedSteps > totalSteps) {
-            totalSteps = calculatedSteps
-        }
         lastSensorValue = sensorValue
+        lastBootId = bootId
         return totalSteps
     }
 
