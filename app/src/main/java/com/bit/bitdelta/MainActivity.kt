@@ -91,13 +91,18 @@ class MainActivity : ComponentActivity() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
         )
 
-        activityRecognitionClient.requestActivityUpdates(detectionIntervalMillis, pendingIntent)
-            .addOnSuccessListener {
-                Log.d("ActivityRecognition", "Successfully requested activity updates")
-            }
-            .addOnFailureListener { e ->
-                Log.e("ActivityRecognition", "Failed to request activity updates", e)
-            }
+        try {
+            activityRecognitionClient.requestActivityUpdates(detectionIntervalMillis, pendingIntent)
+                .addOnSuccessListener {
+                    Log.d("ActivityRecognition", "Successfully requested activity updates")
+                }
+                .addOnFailureListener { e ->
+                    Log.e("ActivityRecognition", "Failed to request activity updates", e)
+                }
+        } catch (e: SecurityException) {
+            // The permission was revoked between the check above and the call.
+            Log.w("ActivityRecognition", "Permission revoked, activity updates not started", e)
+        }
     }
 
     private fun stopActivityRecognition() {
@@ -109,13 +114,18 @@ class MainActivity : ComponentActivity() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
         )
 
-        activityRecognitionClient.removeActivityUpdates(pendingIntent)
-            .addOnSuccessListener {
-                Log.d("ActivityRecognition", "Successfully removed activity updates")
-            }
-            .addOnFailureListener { e ->
-                Log.e("ActivityRecognition", "Failed to remove activity updates", e)
-            }
+        try {
+            activityRecognitionClient.removeActivityUpdates(pendingIntent)
+                .addOnSuccessListener {
+                    Log.d("ActivityRecognition", "Successfully removed activity updates")
+                }
+                .addOnFailureListener { e ->
+                    Log.e("ActivityRecognition", "Failed to remove activity updates", e)
+                }
+        } catch (e: SecurityException) {
+            // Nothing to stop if the permission is gone: the updates are not delivered anyway.
+            Log.w("ActivityRecognition", "Permission revoked, cannot remove activity updates", e)
+        }
     }
 
 }

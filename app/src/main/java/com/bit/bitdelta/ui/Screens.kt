@@ -46,7 +46,8 @@ fun HomeScreen(
     onGrantPermission: () -> Unit
 ) {
     val context = LocalContext.current
-    val goal by context.dataStore.data.map { it[intPreferencesKey("step_goal")] ?: 10000 }.collectAsState(10000)
+    val goalFlow = remember(context) { context.dataStore.data.map { it[intPreferencesKey("step_goal")] ?: 10000 } }
+    val goal by goalFlow.collectAsState(10000)
 
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
@@ -264,7 +265,8 @@ fun SettingsScreen(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val goalKey = intPreferencesKey("step_goal")
-    val goal by context.dataStore.data.map { it[goalKey] ?: 10000 }.collectAsState(10000)
+    val goalFlow = remember(context) { context.dataStore.data.map { it[goalKey] ?: 10000 } }
+    val goal by goalFlow.collectAsState(10000)
 
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
