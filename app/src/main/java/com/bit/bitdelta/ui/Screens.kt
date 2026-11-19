@@ -1,5 +1,8 @@
 package com.bit.bitdelta.ui
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.provider.Settings
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
@@ -309,6 +312,34 @@ fun SettingsScreen(
                         checkedTrackColor = SkyBlue.copy(alpha = 0.5f)
                     )
                 )
+            }
+        }
+
+        Spacer(Modifier.height(16.dp))
+
+        GlassCard(Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier.padding(16.dp).fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text("Работа в фоне", color = TextWhite)
+                    Text(
+                        "Исключите приложение из экономии батареи, иначе система может остановить счёт шагов",
+                        color = TextWhite.copy(alpha = 0.6f),
+                        fontSize = 12.sp
+                    )
+                }
+                TextButton(onClick = {
+                    try {
+                        context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                    } catch (e: ActivityNotFoundException) {
+                        context.startActivity(Intent(Settings.ACTION_SETTINGS))
+                    }
+                }) {
+                    Text("Открыть", color = SkyBlue)
+                }
             }
         }
     }

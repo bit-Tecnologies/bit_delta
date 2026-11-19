@@ -5,6 +5,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.hardware.Sensor
@@ -13,16 +14,19 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Build
 import android.os.IBinder
+import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.MutablePreferences
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 class StepCounterService : Service(), SensorEventListener {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -31,16 +35,36 @@ class StepCounterService : Service(), SensorEventListener {
     private var initialized = false
     private var sensorRegistered = false
 
+    /** Snapshots of the tracker state; conflated so a burst of events costs a single write. */
+    private val pendingWrites = Channel<Snapshot>(Channel.CONFLATED)
+
+    private class Snapshot(val steps: Long, val sensorValue: Long?, val bootId: Long)
+
     override fun onCreate() {
         super.onCreate()
         sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
         createNotificationChannel()
-        migrateForegroundNotification()
+
+        // A sticky restart from the background can be refused on Android 12+, and a health
+        // service without the runtime permission is refused on Android 14+.
+        try {
+            migrateForegroundNotification()
+        } catch (e: Exception) {
+            Log.w(TAG, "Foreground start was refused", e)
+            stopSelf()
+            return
+        }
 
         serviceScope.launch {
             val savedSteps = StepCounterStorage.loadAndMigrate(dataStore)
-            tracker = StepCounterTracker(savedSteps)
+            val prefs = dataStore.data.first()
+            tracker = StepCounterTracker(
+                initialSteps = savedSteps,
+                initialSensorValue = prefs[StepCounterStorage.lastSensorKey],
+                initialBootId = prefs[StepCounterStorage.lastBootIdKey] ?: 0L
+            )
             updateForegroundNotification(savedSteps)
+            launchWriter()
             registerStepSensor()
             initialized = true
         }
@@ -48,20 +72,40 @@ class StepCounterService : Service(), SensorEventListener {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
-    private suspend fun registerStepSensor() = withContext(Dispatchers.Main.immediate) {
-        if (ContextCompat.checkSelfPermission(this@StepCounterService, Manifest.permission.ACTIVITY_RECOGNITION)
-            != PackageManager.PERMISSION_GRANTED
-        ) {
+    private fun launchWriter() {
+        serviceScope.launch(Dispatchers.IO) {
+            for (snapshot in pendingWrites) {
+                dataStore.edit { preferences ->
+                    val storedSteps = preferences[StepCounterStorage.stepsKey] ?: 0L
+                    if (snapshot.steps > storedSteps) {
+                        preferences[StepCounterStorage.stepsKey] = snapshot.steps
+                    }
+                    saveSensorState(preferences, snapshot)
+                }
+                updateForegroundNotification(snapshot.steps)
+            }
+        }
+    }
+
+    private fun saveSensorState(preferences: MutablePreferences,snapshot: Snapshot) {
+        snapshot.sensorValue?.let {
+            preferences[StepCounterStorage.lastSensorKey] = it
+            preferences[StepCounterStorage.lastBootIdKey] = snapshot.bootId
+        }
+    }
+
+    private fun registerStepSensor() {
+        if (!hasActivityPermission(this)) {
             Log.w(TAG, "ACTIVITY_RECOGNITION permission is not granted")
             stopSelf()
-            return@withContext
+            return
         }
 
         val stepCounter = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER)
         val stepDetector = sensorManager.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR)
         sensorRegistered = when {
-            stepCounter != null -> sensorManager.registerListener(this@StepCounterService, stepCounter, SensorManager.SENSOR_DELAY_NORMAL)
-            stepDetector != null -> sensorManager.registerListener(this@StepCounterService, stepDetector, SensorManager.SENSOR_DELAY_FASTEST)
+            stepCounter != null -> sensorManager.registerListener(this, stepCounter, SensorManager.SENSOR_DELAY_NORMAL)
+            stepDetector != null -> sensorManager.registerListener(this, stepDetector, SensorManager.SENSOR_DELAY_FASTEST)
             else -> false
         }
 
@@ -73,21 +117,17 @@ class StepCounterService : Service(), SensorEventListener {
 
     override fun onSensorChanged(event: SensorEvent?) {
         if (!initialized || event == null) return
+        val tracker = tracker ?: return
 
-        val newSteps = when (event.sensor.type) {
-            Sensor.TYPE_STEP_COUNTER -> tracker?.onCounterValue(event.values[0].toLong())
-            Sensor.TYPE_STEP_DETECTOR -> tracker?.onDetectedStep()
-            else -> null
-        } ?: return
-
-        serviceScope.launch(Dispatchers.IO) {
-            dataStore.edit { preferences ->
-                val storedSteps = preferences[StepCounterStorage.stepsKey] ?: 0L
-                if (newSteps > storedSteps) {
-                    preferences[StepCounterStorage.stepsKey] = newSteps
-                }
+        when (event.sensor.type) {
+            Sensor.TYPE_STEP_COUNTER -> {
+                val steps = tracker.onCounterValue(event.values[0].toLong(), currentBootId())
+                pendingWrites.trySend(Snapshot(steps, tracker.lastSensorValue, tracker.lastBootId))
             }
-            updateForegroundNotification(newSteps)
+            Sensor.TYPE_STEP_DETECTOR -> {
+                val steps = tracker.onDetectedStep()
+                pendingWrites.trySend(Snapshot(steps, null, tracker.lastBootId))
+            }
         }
     }
 
@@ -97,11 +137,15 @@ class StepCounterService : Service(), SensorEventListener {
         if (sensorRegistered) {
             sensorManager.unregisterListener(this)
         }
+        pendingWrites.close()
         serviceScope.cancel()
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    private fun currentBootId(): Long =
+        Settings.Global.getInt(contentResolver, Settings.Global.BOOT_COUNT, 0).toLong()
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -149,10 +193,28 @@ class StepCounterService : Service(), SensorEventListener {
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
 
-    private companion object {
-        const val TAG = "StepCounterService"
-        const val CHANNEL_ID = "step_tracking_channel"
-        const val NOTIFICATION_ID = 1
-        const val LEGACY_FOREGROUND_ID = 2
+    companion object {
+        private const val TAG = "StepCounterService"
+        private const val CHANNEL_ID = "step_tracking_channel"
+        private const val NOTIFICATION_ID = 1
+        private const val LEGACY_FOREGROUND_ID = 2
+
+        /** ACTIVITY_RECOGNITION is a runtime permission only since Android 10. */
+        fun hasActivityPermission(context: Context): Boolean =
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
+                ContextCompat.checkSelfPermission(context, Manifest.permission.ACTIVITY_RECOGNITION) ==
+                PackageManager.PERMISSION_GRANTED
+
+        /** Starts the service if allowed; returns false instead of crashing when the system refuses. */
+        fun start(context: Context): Boolean {
+            if (!hasActivityPermission(context)) return false
+            return try {
+                ContextCompat.startForegroundService(context, Intent(context, StepCounterService::class.java))
+                true
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not start the step service", e)
+                false
+            }
+        }
     }
 }
